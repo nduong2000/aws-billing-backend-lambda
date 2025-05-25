@@ -1,0 +1,18 @@
+graph TD
+    subgraph AWS Cloud
+        A[Route 53 DNS] -->|DNS Resolution| B[Elastic Load Balancer]
+        B -->|Traffic Distribution| C[Elastic Beanstalk]
+        C -->|Database Queries| D[(RDS PostgreSQL)]
+        C -->|AI Processing| E[AWS Bedrock]
+        F[S3 Bucket] -->|Static Files| B
+    end
+    
+    Browser[Web Browser] -->|HTTPS Request| A
+    
+    style A fill:#f5f5f5,stroke:#666,stroke-width:2px
+    style B fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style C fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    style D fill:#fff2cc,stroke:#d6b656,stroke-width:2px
+    style E fill:#ffe6cc,stroke:#d79b00,stroke-width:2px
+    style F fill:#e1d5e7,stroke:#9673a6,stroke-width:2px
+    style Browser fill:#f9f9f9,stroke:#333,stroke-width:2px

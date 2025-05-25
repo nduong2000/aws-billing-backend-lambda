@@ -1,0 +1,24 @@
+graph TD
+    subgraph FastAPI Application
+        P[Patient Module] 
+        PR[Provider Module]
+        S[Service Module]
+        A[Appointment Module]
+        C[Claim Module]
+        PM[Payment Module]
+        AU[Audit Module with Bedrock AI]
+        
+        P & PR & S --> A
+        P & PR & S --> C
+        C --> PM
+        C --> AU
+        PM --> AU
+    end
+    
+    style P fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style PR fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style S fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style A fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    style C fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    style PM fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    style AU fill:#ffe6cc,stroke:#d79b00,stroke-width:2px

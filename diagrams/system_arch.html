@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Architecture Diagrams</title>
+    <!-- Load React and ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Add Tailwind CSS if your component uses it -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- Load your compiled script -->
+    <script src="sys_arch_app.js"></script>
+    
+    <!-- Initialize your React component -->
+    <script>
+        // This assumes your component is the default export
+        // If your file structure is different, adjust accordingly
+        const rootElement = document.getElementById('root');
+        const root = ReactDOM.createRoot(rootElement);
+        root.render(React.createElement(SystemArchitectureDiagrams));
+    </script>
+</body>
+</html>

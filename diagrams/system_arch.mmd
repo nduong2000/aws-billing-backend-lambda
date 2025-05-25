@@ -1,0 +1,12 @@
+graph LR
+    A[Web Browser] <-->|HTTP/HTTPS| B[Frontend App]
+    B <-->|API Calls| C[API Backend]
+    C -->|Queries| D[(PostgreSQL DB)]
+    C -->|AI Processing| E[AWS Bedrock AI/ML]
+    E -->|Results| C
+    
+    style A fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style B fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style C fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    style D fill:#fff2cc,stroke:#d6b656,stroke-width:2px
+    style E fill:#ffe6cc,stroke:#d79b00,stroke-width:2px

@@ -1,0 +1,21 @@
+graph LR
+    P[Patient Data] --> A[Appointment Data]
+    PR[Provider Data] --> A
+    S[Service Data] --> A
+    
+    P --> C[Claim Processing]
+    PR --> C
+    S --> C
+    A --> C
+    
+    C --> PM[Payment Processing]
+    C --> AU[Audit System]
+    PM --> AU
+    
+    style P fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style PR fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style S fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style A fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    style C fill:#f8cecc,stroke:#b85450,stroke-width:2px
+    style PM fill:#ffe6cc,stroke:#d79b00,stroke-width:2px
+    style AU fill:#e1d5e7,stroke:#9673a6,stroke-width:2px

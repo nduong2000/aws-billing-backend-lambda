@@ -1,0 +1,29 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "apprunner:CreateService",
+                "apprunner:ListServices",
+                "apprunner:DescribeService",
+                "apprunner:DeleteService",
+                "apprunner:UpdateService",
+                "apprunner:TagResource",
+                "apprunner:UntagResource",
+                "apprunner:ListTagsForResource"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
