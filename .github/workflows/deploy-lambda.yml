@@ -282,6 +282,8 @@ jobs:
             --principal "*" \
             --function-url-auth-type NONE \
             --region $AWS_REGION || true
+        else
+          echo "Function URL already exists: $FUNCTION_URL"
         fi
         
         echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_OUTPUT
