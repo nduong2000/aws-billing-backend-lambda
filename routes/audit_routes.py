@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import logging
@@ -22,9 +22,52 @@ class CustomJSONEncoder(json.JSONEncoder):
 router = APIRouter()
 logger = logging.getLogger("audit_routes")
 
+# Supported models configuration
+SUPPORTED_MODELS = {
+    "us.anthropic.claude-sonnet-4-20250514-v1:0": {
+        "name": "Claude Sonnet 4",
+        "provider": "anthropic",
+        "type": "claude",
+        "max_tokens": 4000,
+        "temperature": 0.7
+    },
+    "us.anthropic.claude-3-7-sonnet-20250109-v1:0": {
+        "name": "Claude 3.7 Sonnet",
+        "provider": "anthropic",
+        "type": "claude",
+        "max_tokens": 4000,
+        "temperature": 0.7
+    },
+    "anthropic.claude-3-haiku-20240307-v1:0": {
+        "name": "Claude 3 Haiku",
+        "provider": "anthropic",
+        "type": "claude", 
+        "max_tokens": 3000,
+        "temperature": 0.7
+    },
+    "us.meta.llama4-scout-17b-instruct-v1:0": {
+        "name": "Llama 4 Scout 17B Instruct",
+        "provider": "meta",
+        "type": "llama",
+        "max_tokens": 2048,
+        "temperature": 0.7
+    },
+    "us.meta.llama4-maverick-17b-instruct-v1:0": {
+        "name": "Llama 4 Maverick 17B Instruct",
+        "provider": "meta",
+        "type": "llama",
+        "max_tokens": 2048,
+        "temperature": 0.7
+    }
+}
+
+# Default model - using Claude Sonnet 4 as requested
+DEFAULT_MODEL = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+
 # Pydantic models for validation
 class AuditRequest(BaseModel):
     claim_data: str
+    model_id: Optional[str] = None
 
 class AuditResponse(BaseModel):
     audit_result: str
@@ -38,8 +81,112 @@ def get_bedrock_client():
         region_name=os.getenv("AWS_REGION", "us-east-1")
     )
 
-# Model ID configuration
-MODEL_ID = os.getenv("AUDIT_MODEL", "anthropic.claude-3-haiku-20240307-v1:0")
+# Check if model is available in Bedrock
+async def check_model_availability(model_id: str) -> bool:
+    """Check if a model is available for invocation in AWS Bedrock"""
+    try:
+        bedrock_runtime = get_bedrock_client()
+        
+        # Try a minimal test request to see if the model is available
+        test_config = get_model_config(model_id)
+        test_body = create_request_body("Test", test_config)
+        
+        # This will fail if the model isn't available, but we catch the specific error
+        response = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            body=json.dumps(test_body)
+        )
+        return True
+    except Exception as e:
+        error_str = str(e)
+        if "ValidationException" in error_str and "inference profile" in error_str:
+            logger.warning(f"Model {model_id} requires inference profile - not directly available")
+            return False
+        elif "AccessDeniedException" in error_str:
+            logger.warning(f"Access denied for model {model_id} - may need to request access")
+            return False
+        elif "ResourceNotFoundException" in error_str:
+            logger.warning(f"Model {model_id} not found in this region")
+            return False
+        else:
+            logger.warning(f"Unknown error checking model {model_id}: {error_str}")
+            return False
+
+# Get model configuration with availability check
+def get_model_config(model_id: str = None) -> Dict[str, Any]:
+    """Get model configuration with fallback to default"""
+    if not model_id:
+        model_id = os.getenv("AUDIT_MODEL", DEFAULT_MODEL)
+    
+    if model_id not in SUPPORTED_MODELS:
+        logger.warning(f"Unsupported model {model_id}, falling back to default: {DEFAULT_MODEL}")
+        model_id = DEFAULT_MODEL
+    
+    config = SUPPORTED_MODELS[model_id].copy()
+    config["model_id"] = model_id
+    return config
+
+# Create model-specific request body
+def create_request_body(prompt: str, model_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Create request body based on model type"""
+    model_type = model_config["type"]
+    
+    if model_type == "claude":
+        return {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": model_config["max_tokens"],
+            "temperature": model_config["temperature"],
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }
+    elif model_type == "llama":
+        return {
+            "prompt": prompt,
+            "max_gen_len": model_config["max_tokens"],
+            "temperature": model_config["temperature"],
+            "top_p": 0.9
+        }
+    elif model_type == "mistral":
+        return {
+            "prompt": prompt,
+            "max_tokens": model_config["max_tokens"],
+            "temperature": model_config["temperature"],
+            "top_p": 0.9,
+            "top_k": 50
+        }
+    else:
+        # Fallback to Claude format
+        return {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": model_config["max_tokens"],
+            "temperature": model_config["temperature"],
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }
+
+# Parse model-specific response
+def parse_model_response(response_body: Dict[str, Any], model_config: Dict[str, Any]) -> str:
+    """Parse response based on model type"""
+    model_type = model_config["type"]
+    
+    try:
+        if model_type == "claude":
+            return response_body.get("content", [{"text": ""}])[0].get("text", "")
+        elif model_type == "llama":
+            return response_body.get("generation", "")
+        elif model_type == "mistral":
+            outputs = response_body.get("outputs", [])
+            if outputs:
+                return outputs[0].get("text", "")
+            return ""
+        else:
+            # Fallback to Claude format
+            return response_body.get("content", [{"text": ""}])[0].get("text", "")
+    except Exception as e:
+        logger.error(f"Error parsing response for model type {model_type}: {e}")
+        return ""
 
 # Format claim data for LLM prompt (ported from auditController.js)
 def format_claim_data_for_llm(claim) -> str:
@@ -127,11 +274,46 @@ def format_claim_data_for_llm(claim) -> str:
             return f"Error formatting claim data: {str(e)}\nRaw claim data: {str(claim)}"
 
 # Main audit function for claims
-async def process_audit(claim_data: str) -> Dict[str, Any]:
+async def process_audit(claim_data: str, model_id: str = None) -> Dict[str, Any]:
     """
     Process a medical billing claim audit using AWS Bedrock
     """
     try:
+        # Get model configuration
+        model_config = get_model_config(model_id)
+        actual_model_id = model_config["model_id"]
+        
+        # Debug logging for model selection
+        logger.info(f"🔍 AUDIT DEBUG: Processing audit request")
+        logger.info(f"📋 AUDIT DEBUG: Requested model: {model_id or 'None (using default)'}")
+        logger.info(f"🤖 AUDIT DEBUG: Selected model: {actual_model_id} ({model_config['name']})")
+        logger.info(f"🏭 AUDIT DEBUG: Model provider: {model_config['provider']}")
+        logger.info(f"⚙️ AUDIT DEBUG: Model type: {model_config['type']}")
+        logger.info(f"🎯 AUDIT DEBUG: Default model available: {DEFAULT_MODEL}")
+        logger.info(f"📊 AUDIT DEBUG: Total supported models: {len(SUPPORTED_MODELS)}")
+        
+        # Log model selection logic
+        if model_id:
+            if model_id in SUPPORTED_MODELS:
+                logger.info(f"✅ AUDIT DEBUG: Requested model '{model_id}' is supported")
+            else:
+                logger.warning(f"⚠️ AUDIT DEBUG: Requested model '{model_id}' not supported, using default")
+        else:
+            logger.info(f"🔧 AUDIT DEBUG: No model specified, using default: {DEFAULT_MODEL}")
+        
+        # Log environment variable override if present
+        env_model = os.getenv("AUDIT_MODEL")
+        if env_model and env_model != DEFAULT_MODEL:
+            logger.info(f"🌍 AUDIT DEBUG: Environment override detected: AUDIT_MODEL={env_model}")
+            if env_model == actual_model_id:
+                logger.info(f"✅ AUDIT DEBUG: Using environment model: {env_model}")
+            else:
+                logger.warning(f"⚠️ AUDIT DEBUG: Environment model '{env_model}' not supported, using: {actual_model_id}")
+        
+        # Log final model choice with emphasis
+        logger.info(f"🚀 AUDIT DEBUG: FINAL MODEL CHOICE: {actual_model_id} ({model_config['name']}) from {model_config['provider']}")
+        logger.info(f"⚙️ AUDIT DEBUG: Model configuration - Max tokens: {model_config['max_tokens']}, Temperature: {model_config['temperature']}")
+        
         # Get the Bedrock client
         bedrock_runtime = get_bedrock_client()
         
@@ -157,34 +339,64 @@ Provide a comprehensive audit report covering these areas:
 Please provide a detailed analysis with specific findings and recommendations.
 """
 
-        # Log the audit request
-        logger.info(f"Sending audit request to AWS Bedrock using model {MODEL_ID}")
+        # Log the audit request details
+        logger.info(f"📤 AUDIT DEBUG: Sending request to AWS Bedrock")
+        logger.info(f"📏 AUDIT DEBUG: Prompt length: {len(audit_prompt)} characters")
+        logger.info(f"🎛️ AUDIT DEBUG: Max tokens: {model_config['max_tokens']}")
+        logger.info(f"🌡️ AUDIT DEBUG: Temperature: {model_config['temperature']}")
         
-        # Claude requires a different format than Mistral
-        request_body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 3000,
-            "temperature": 0.7,
-            "messages": [
-                {"role": "user", "content": audit_prompt}
-            ]
-        }
+        # Create model-specific request body
+        request_body = create_request_body(audit_prompt, model_config)
         
         # Invoke the model
-        response = bedrock_runtime.invoke_model(
-            modelId=MODEL_ID,
-            body=json.dumps(request_body)
-        )
+        try:
+            response = bedrock_runtime.invoke_model(
+                modelId=actual_model_id,
+                body=json.dumps(request_body)
+            )
+        except Exception as invoke_error:
+            error_str = str(invoke_error)
+            
+            # Handle specific model invocation errors
+            if "ValidationException" in error_str and "inference profile" in error_str:
+                logger.error(f"❌ AUDIT DEBUG: Model {actual_model_id} requires inference profile")
+                logger.info(f"🔄 AUDIT DEBUG: Trying fallback to Claude 3 Haiku")
+                
+                # Try fallback to Claude 3 Haiku
+                fallback_config = get_model_config("anthropic.claude-3-haiku-20240307-v1:0")
+                fallback_body = create_request_body(audit_prompt, fallback_config)
+                
+                try:
+                    response = bedrock_runtime.invoke_model(
+                        modelId=fallback_config["model_id"],
+                        body=json.dumps(fallback_body)
+                    )
+                    model_config = fallback_config
+                    actual_model_id = fallback_config["model_id"]
+                    logger.info(f"✅ AUDIT DEBUG: Successfully using fallback model: {model_config['name']}")
+                except Exception as fallback_error:
+                    logger.error(f"❌ AUDIT DEBUG: Fallback model also failed: {str(fallback_error)}")
+                    raise invoke_error
+            elif "AccessDeniedException" in error_str:
+                logger.error(f"❌ AUDIT DEBUG: Access denied for model {actual_model_id}")
+                raise invoke_error
+            else:
+                logger.error(f"❌ AUDIT DEBUG: Unknown model invocation error: {error_str}")
+                raise invoke_error
         
         # Parse the response
         response_body = json.loads(response['body'].read())
-        audit_response = response_body.get("content", [{"text": ""}])[0].get("text", "")
+        audit_response = parse_model_response(response_body, model_config)
+        
+        # Debug logging for response
+        logger.info(f"📥 AUDIT DEBUG: Received response from {model_config['name']}")
+        logger.info(f"📏 AUDIT DEBUG: Response length: {len(audit_response)} characters")
         
         # Check if we got an empty response
         if not audit_response or audit_response.strip() == "":
-            logger.error("Empty response received from AWS Bedrock")
+            logger.error(f"❌ AUDIT DEBUG: Empty response received from {model_config['name']}")
             audit_response = (
-                "The audit system could not generate an analysis at this time. "
+                f"The audit system using {model_config['name']} could not generate an analysis at this time. "
                 "Please try again later or contact system administration."
             )
             
@@ -197,55 +409,112 @@ Please provide a detailed analysis with specific findings and recommendations.
             "success": True,
             "details": {
                 "fraud_score": fraud_score,
-                "model_used": MODEL_ID,
+                "model_used": actual_model_id,
+                "model_name": model_config["name"],
+                "model_provider": model_config["provider"],
                 "prompt_length": len(audit_prompt),
-                "response_length": len(audit_response)
+                "response_length": len(audit_response),
+                "timestamp": datetime.now().isoformat()
             }
         }
         
-        # Log the final response we're sending back
-        logger.info(f"Final response object: {json.dumps(response_object, default=str)[:500]}...")
+        logger.info(f"✅ AUDIT DEBUG: Audit completed successfully using {model_config['name']}")
+        logger.info(f"📊 AUDIT DEBUG: Fraud score: {fraud_score}")
         
         return response_object
-    except Exception as e:
-        logger.error(f"Error in audit processing: {e}", exc_info=True)
         
-        # Check if this is a Bedrock access denied error
-        if "AccessDeniedException" in str(e) or "access to the model" in str(e):
-            logger.info("Bedrock access denied, using mock audit response")
-            return await generate_mock_audit_response(claim_data)
+    except Exception as e:
+        logger.error(f"❌ AUDIT DEBUG: Error in process_audit: {str(e)}")
+        logger.error(f"🔧 AUDIT DEBUG: Falling back to mock audit system")
+        
+        # Fallback to mock audit if Bedrock fails
+        try:
+            mock_response = await generate_mock_audit_response(claim_data, model_id)
+            mock_response["details"]["model_used"] = f"MOCK_FALLBACK (requested: {model_id or 'default'})"
+            mock_response["details"]["error"] = str(e)
+            return mock_response
+        except Exception as mock_error:
+            logger.error(f"❌ AUDIT DEBUG: Mock audit also failed: {str(mock_error)}")
+            return {
+                "audit_result": f"Audit system temporarily unavailable. Error: {str(e)}",
+                "success": False,
+                "details": {
+                    "error": str(e),
+                    "model_requested": model_id or "default",
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+
+# API endpoint to list available models
+@router.get("/models", response_model=Dict[str, Any])
+@router.get("/models/", response_model=Dict[str, Any])  # Handle with trailing slash
+async def list_available_models():
+    """List all available models for audit processing"""
+    try:
+        models_info = []
+        for model_id, config in SUPPORTED_MODELS.items():
+            models_info.append({
+                "model_id": model_id,
+                "name": config["name"],
+                "provider": config["provider"],
+                "type": config["type"],
+                "max_tokens": config["max_tokens"],
+                "temperature": config["temperature"],
+                "is_default": model_id == DEFAULT_MODEL
+            })
         
         return {
-            "audit_result": f"Failed to complete audit due to an error: {str(e)}. Please check server logs for details.",
-            "success": False,
-            "details": {"error": str(e)}
+            "models": models_info,
+            "default_model": DEFAULT_MODEL,
+            "total_models": len(SUPPORTED_MODELS)
         }
+    except Exception as e:
+        logger.error(f"Error listing models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-async def generate_mock_audit_response(claim_data: str) -> Dict[str, Any]:
+# Generate mock audit response when Bedrock is not available
+async def generate_mock_audit_response(claim_data: str, requested_model: str = None) -> Dict[str, Any]:
     """
-    Generate a mock audit response when Bedrock is not available
+    Generate a mock audit response when AWS Bedrock is not available
     """
     try:
-        # Format the claim data for analysis
+        # Format the claim data
         formatted_claim_data = format_claim_data_for_llm(claim_data)
         
-        # Calculate a fraud score using our existing function
-        fraud_score = await calculate_fraud_score(formatted_claim_data, "")
+        # Calculate a basic fraud score
+        fraud_score = await calculate_fraud_score(formatted_claim_data, "mock audit analysis")
         
-        # Generate a comprehensive mock audit response
+        # Get model info for the requested model
+        model_config = get_model_config(requested_model)
+        
+        # Debug logging for mock audit
+        logger.info(f"🔧 MOCK AUDIT DEBUG: Generating mock response")
+        logger.info(f"📋 MOCK AUDIT DEBUG: Requested model: {requested_model or 'None (using default)'}")
+        logger.info(f"🤖 MOCK AUDIT DEBUG: Would use model: {model_config['model_id']} ({model_config['name']})")
+        logger.info(f"🏭 MOCK AUDIT DEBUG: Model provider: {model_config['provider']}")
+        logger.info(f"🎯 MOCK AUDIT DEBUG: Default model: {DEFAULT_MODEL}")
+        logger.info(f"📊 MOCK AUDIT DEBUG: Generated fraud score: {fraud_score}")
+
         mock_audit = f"""
 **MEDICAL BILLING AUDIT REPORT**
-*Note: This is a mock audit response generated while AWS Bedrock model access is being configured.*
+*Generated by Mock Audit System*
+
+**MODEL INFORMATION**
+• Requested Model: {requested_model or 'Default'}
+• Would Use: {model_config['name']} ({model_config['model_id']})
+• Provider: {model_config['provider']}
+• Default Available: Claude Sonnet 4 ({DEFAULT_MODEL})
+• Note: This is a mock response - enable AWS Bedrock for full AI analysis
 
 **1. CODING ACCURACY**
-✅ CPT codes appear to be properly formatted and within valid ranges
-✅ ICD-10 codes follow standard formatting conventions
-⚠️  Recommend verification of code-to-service alignment with current coding guidelines
+✅ CPT codes appear to follow standard formatting
+✅ Basic code structure validation passed
+ℹ️  Detailed code accuracy requires AI model analysis
 
 **2. DOCUMENTATION COMPLETENESS**
-✅ Basic claim information is present and complete
-✅ Patient and provider information properly documented
-⚠️  Clinical documentation review recommended for complex procedures
+✅ Required fields are present in the claim
+✅ Basic data validation passed
+ℹ️  Comprehensive documentation review requires AI analysis
 
 **3. MEDICAL NECESSITY**
 ✅ Services appear appropriate for documented conditions
@@ -276,27 +545,41 @@ This preliminary audit shows the claim follows basic formatting and completeness
 *To enable full audit functionality:*
 1. Go to AWS Bedrock Console
 2. Navigate to "Model access"
-3. Request access to Anthropic Claude models
+3. Request access to the following models:
+   - {model_config['model_id']} (Target Model)
+   - {DEFAULT_MODEL} (Default: Claude Sonnet 4)
+   - anthropic.claude-3-haiku-20240307-v1:0 (Fallback)
 4. Approval is typically instant for most models
 """
+
+        logger.info(f"✅ MOCK AUDIT DEBUG: Mock audit completed successfully")
 
         return {
             "audit_result": mock_audit,
             "success": True,
             "details": {
                 "fraud_score": fraud_score,
-                "model_used": "mock-audit-system",
+                "model_used": f"MOCK_SYSTEM (would_use: {model_config['model_id']})",
+                "model_name": f"Mock System (Target: {model_config['name']})",
+                "model_provider": f"mock (target: {model_config['provider']})",
+                "requested_model": requested_model or "default",
+                "target_model": model_config['model_id'],
                 "prompt_length": len(formatted_claim_data),
                 "response_length": len(mock_audit),
-                "note": "Mock response - enable AWS Bedrock for full AI analysis"
+                "note": "Mock response - enable AWS Bedrock for full AI analysis",
+                "timestamp": datetime.now().isoformat()
             }
         }
     except Exception as e:
-        logger.error(f"Error generating mock audit response: {e}")
+        logger.error(f"❌ MOCK AUDIT DEBUG: Error generating mock audit response: {e}")
         return {
             "audit_result": "Mock audit system temporarily unavailable. Please enable AWS Bedrock model access for full functionality.",
             "success": False,
-            "details": {"error": str(e)}
+            "details": {
+                "error": str(e),
+                "requested_model": requested_model or "default",
+                "timestamp": datetime.now().isoformat()
+            }
         }
 
 # Calculate fraud score using basic NLP analysis
@@ -367,8 +650,12 @@ async def calculate_fraud_score(claim_data: str, audit_result: str) -> float:
 
 # API endpoint for claim auditing
 @router.post("/claims/{claim_id}", response_model=Dict[str, Any])
-async def audit_claim(claim_id: int):
+async def audit_claim(claim_id: int, model_id: Optional[str] = Query(None, description="Model ID to use for audit")):
     try:
+        # Debug logging for claim audit request
+        logger.info(f"🔍 CLAIM AUDIT DEBUG: Starting audit for claim {claim_id}")
+        logger.info(f"📋 CLAIM AUDIT DEBUG: Requested model: {model_id or 'None (using default)'}")
+        
         # Get claim data
         query = '''
         SELECT c.*, p.first_name || ' ' || p.last_name as patient_name,
@@ -381,6 +668,7 @@ async def audit_claim(claim_id: int):
         claim_result = db.query(query, [claim_id])
         
         if not claim_result:
+            logger.warning(f"❌ CLAIM AUDIT DEBUG: Claim {claim_id} not found")
             raise HTTPException(status_code=404, detail="Claim not found")
             
         claim = claim_result[0]
@@ -397,12 +685,14 @@ async def audit_claim(claim_id: int):
         # Add items to the claim
         claim["items"] = claim_items
         
-        # Process the audit directly with the claim object
-        # Skip JSON serialization to avoid potential issues
-        audit_result = await process_audit(claim)
+        logger.info(f"📊 CLAIM AUDIT DEBUG: Found claim with {len(claim_items)} items")
+        
+        # Process the audit directly with the claim object and model selection
+        audit_result = await process_audit(claim, model_id)
         
         # Log the complete audit result before returning
-        logger.info(f"Complete audit result for claim {claim_id}: {json.dumps(audit_result, default=str)[:500]}...")
+        logger.info(f"✅ CLAIM AUDIT DEBUG: Audit completed for claim {claim_id}")
+        logger.info(f"📏 CLAIM AUDIT DEBUG: Result length: {len(audit_result.get('audit_result', ''))}")
         
         # If successful, update the fraud score in the database
         if audit_result["success"] and "fraud_score" in audit_result.get("details", {}):
@@ -413,6 +703,8 @@ async def audit_claim(claim_id: int):
                 "UPDATE claims SET fraud_score = %s WHERE claim_id = %s",
                 [fraud_score, claim_id]
             )
+            
+            logger.info(f"📊 CLAIM AUDIT DEBUG: Updated fraud score in database: {fraud_score}")
         
         # Format the response to match what the frontend expects (with 'analysis' field)
         frontend_response = {
@@ -422,11 +714,11 @@ async def audit_claim(claim_id: int):
             "details": audit_result.get("details", {})
         }
         
-        logger.info(f"Returning frontend-compatible response with analysis length: {len(frontend_response['analysis'])}")
+        logger.info(f"🚀 CLAIM AUDIT DEBUG: Returning response for claim {claim_id}")
         
         return frontend_response
     except Exception as e:
-        logger.error(f"Error auditing claim {claim_id}: {e}", exc_info=True)
+        logger.error(f"❌ CLAIM AUDIT DEBUG: Error auditing claim {claim_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # API endpoint for direct audit of claim data
@@ -438,7 +730,7 @@ async def process_audit_request(audit_request: AuditRequest):
         logger.info(f"Processing audit request with data length: {len(audit_request.claim_data)}")
         
         # Process the audit directly from provided data
-        audit_result = await process_audit(audit_request.claim_data)
+        audit_result = await process_audit(audit_request.claim_data, audit_request.model_id)
         
         # Log the result before returning
         logger.info(f"Audit request processed, result length: {len(audit_result.get('audit_result', ''))}")
