@@ -86,6 +86,19 @@
         {
             "Effect": "Allow",
             "Action": [
+                "iam:CreateRole",
+                "iam:AttachRolePolicy",
+                "iam:PutRolePolicy",
+                "iam:GetRolePolicy",
+                "iam:ListRolePolicies"
+            ],
+            "Resource": [
+                "arn:aws:iam::*:role/medical-billing-lambda-role"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
                 "logs:CreateLogGroup",
                 "logs:CreateLogStream",
                 "logs:PutLogEvents",

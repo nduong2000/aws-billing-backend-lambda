@@ -103,10 +103,59 @@ jobs:
             --role-name medical-billing-lambda-role \
             --policy-arn arn:aws:iam::aws:policy/AmazonBedrockFullAccess
           
+          # Create and attach ECR policy for Lambda
+          cat > lambda-ecr-policy.json << EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage"
+              ],
+              "Resource": "*"
+            }
+          ]
+        }
+        EOF
+          
+          aws iam put-role-policy \
+            --role-name medical-billing-lambda-role \
+            --policy-name LambdaECRPolicy \
+            --policy-document file://lambda-ecr-policy.json
+          
           # Wait for role to be available
-          sleep 10
+          sleep 15
           
           ROLE_ARN=$(aws iam get-role --role-name medical-billing-lambda-role --query 'Role.Arn' --output text)
+        else
+          echo "Role exists, ensuring ECR permissions..."
+          # Add ECR policy to existing role
+          cat > lambda-ecr-policy.json << EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage"
+              ],
+              "Resource": "*"
+            }
+          ]
+        }
+        EOF
+          
+          aws iam put-role-policy \
+            --role-name medical-billing-lambda-role \
+            --policy-name LambdaECRPolicy \
+            --policy-document file://lambda-ecr-policy.json || true
         fi
         
         echo "Using role: $ROLE_ARN"
@@ -125,6 +174,34 @@ jobs:
             "BEDROCK_REGION":"us-east-1"
           }' \
           --region $AWS_REGION
+
+    - name: Ensure Lambda execution role has ECR permissions
+      run: |
+        echo "Ensuring Lambda execution role has ECR permissions..."
+        cat > lambda-ecr-policy.json << EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage"
+              ],
+              "Resource": "*"
+            }
+          ]
+        }
+        EOF
+        
+        aws iam put-role-policy \
+          --role-name medical-billing-lambda-role \
+          --policy-name LambdaECRPolicy \
+          --policy-document file://lambda-ecr-policy.json
+        
+        echo "ECR permissions added to Lambda execution role"
 
     - name: Update Lambda function code
       if: steps.check-function.outputs.function_exists == 'true'
