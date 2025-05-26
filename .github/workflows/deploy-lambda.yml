@@ -222,6 +222,11 @@ jobs:
           --image-uri $IMAGE_URI \
           --region $AWS_REGION
 
+    - name: Wait for function code update to complete
+      run: |
+        echo "Waiting for function code update to complete..."
+        aws lambda wait function-updated --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION
+
     - name: Update Lambda function configuration
       run: |
         # Create Lambda configuration JSON
@@ -244,9 +249,14 @@ jobs:
           --cli-input-json file://lambda-update-config.json \
           --region $AWS_REGION
 
+    - name: Wait for function configuration update to complete
+      run: |
+        echo "Waiting for function configuration update to complete..."
+        aws lambda wait function-updated --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION
+
     - name: Wait for function to be updated
       run: |
-        echo "Waiting for function update to complete..."
+        echo "Final wait to ensure function is fully ready..."
         aws lambda wait function-updated --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION
 
     - name: Create or update Function URL
