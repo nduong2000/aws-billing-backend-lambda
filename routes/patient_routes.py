@@ -27,9 +27,10 @@ class PatientResponse(PatientBase):
     patient_id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 @router.get("/", response_model=List[Dict[str, Any]])
+@router.get("", response_model=List[Dict[str, Any]])  # Handle without trailing slash
 async def get_all_patients():
     try:
         patients = db.query("SELECT * FROM patients ORDER BY last_name, first_name")

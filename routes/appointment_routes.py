@@ -26,9 +26,10 @@ class AppointmentResponse(AppointmentBase):
     appointment_id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 @router.get("/", response_model=List[Dict[str, Any]])
+@router.get("", response_model=List[Dict[str, Any]])  # Handle without trailing slash
 async def get_all_appointments(
     patient_id: Optional[int] = Query(None),
     provider_id: Optional[int] = Query(None)

@@ -1,0 +1,76 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+lambda-deployment/
+lambda_package/
+*.zip
+*.tar.gz
+diagrams/
+static/
+sql/
+test_*.py
+*test*.sh
+docker-compose*.yml
+Procfile
+README.md
+*.md
+LICENSE
+
+# Environment files
+.env
+env.example
+environment-variables.json
+
+# Deployment scripts
+aws_deploy.sh
+deploy-*.sh
+test-*.sh
+
+# Backup files
+*bak.txt
+*backup* 

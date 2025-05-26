@@ -57,7 +57,7 @@ class ClaimResponse(ClaimBase):
     fraud_score: Optional[float] = None
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Simple test endpoint that doesn't require database access
 @router.get("/test", response_model=Dict[str, str])
@@ -66,6 +66,7 @@ async def test_claims_route():
     return {"status": "Claims route is working"}
 
 @router.get("/", response_model=List[Dict[str, Any]])
+@router.get("", response_model=List[Dict[str, Any]])  # Handle without trailing slash
 async def get_all_claims(
     patient_id: Optional[int] = Query(None),
     provider_id: Optional[int] = Query(None),

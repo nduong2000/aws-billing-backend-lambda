@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "9001:8080"
+    environment:
+      - AWS_REGION=us-east-1
+      - BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+      - AWS_LAMBDA_FUNCTION_MEMORY_SIZE=3008
+      - NODE_ENV=development
+    volumes:
+      - ~/.aws:/root/.aws:ro  # Mount AWS credentials for local testing
+    command: ["python", "-m", "awslambdaric", "lambda_handler.handler"]
+
+  # Optional: Local PostgreSQL for testing
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=medical_billing
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./sql/medical_billing_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql

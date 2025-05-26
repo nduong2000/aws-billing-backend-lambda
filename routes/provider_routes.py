@@ -25,9 +25,10 @@ class ProviderResponse(ProviderBase):
     provider_id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 @router.get("/", response_model=List[Dict[str, Any]])
+@router.get("", response_model=List[Dict[str, Any]])  # Handle without trailing slash
 async def get_all_providers():
     try:
         providers = db.query("SELECT * FROM providers ORDER BY provider_name")

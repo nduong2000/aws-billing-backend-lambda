@@ -29,10 +29,11 @@ class ServiceResponse(ServiceBase):
     service_id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # GET all services
 @router.get("/", response_model=List[Dict[str, Any]])
+@router.get("", response_model=List[Dict[str, Any]])  # Handle without trailing slash
 async def get_all_services():
     try:
         services = db.query("SELECT * FROM services ORDER BY cpt_code")

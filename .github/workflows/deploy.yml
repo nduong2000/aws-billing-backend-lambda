@@ -1,0 +1,114 @@
+name: Deploy to AWS CloudFront
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '18'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Create production environment file
+      run: |
+        echo "VITE_API_URL=${{ secrets.VITE_API_URL }}" > .env.production
+        echo "NODE_ENV=production" >> .env.production
+
+    - name: Build application
+      run: npm run build
+      env:
+        NODE_ENV: production
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Deploy to S3
+      run: |
+        # Sync built files to S3 bucket
+        aws s3 sync dist/ s3://${{ secrets.S3_BUCKET_NAME }} --delete \
+          --cache-control "max-age=31536000" --exclude "*.html"
+        
+        # Upload HTML files with no-cache headers
+        aws s3 sync dist/ s3://${{ secrets.S3_BUCKET_NAME }} --delete \
+          --cache-control "max-age=0, no-cache, no-store, must-revalidate" --include "*.html"
+
+    - name: Invalidate CloudFront cache
+      run: |
+        aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+          --paths "/*"
+
+    - name: Get CloudFront URL
+      id: cloudfront-url
+      run: |
+        CLOUDFRONT_DOMAIN=$(aws cloudfront get-distribution \
+          --id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+          --query 'Distribution.DomainName' --output text)
+        echo "domain=$CLOUDFRONT_DOMAIN" >> $GITHUB_OUTPUT
+        echo "url=https://$CLOUDFRONT_DOMAIN" >> $GITHUB_OUTPUT
+
+    - name: Deployment Summary
+      run: |
+        echo "## 🎉 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📱 Application URLs:" >> $GITHUB_STEP_SUMMARY
+        echo "- **CloudFront URL:** ${{ steps.cloudfront-url.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **S3 Bucket:** s3://${{ secrets.S3_BUCKET_NAME }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔧 Configuration:" >> $GITHUB_STEP_SUMMARY
+        echo "- **AWS Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **CloudFront Distribution:** ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Node.js Version:** ${{ env.NODE_VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ⏱️ Cache Invalidation:" >> $GITHUB_STEP_SUMMARY
+        echo "CloudFront cache has been invalidated. Changes may take 5-15 minutes to propagate globally." >> $GITHUB_STEP_SUMMARY
+
+  # Optional: Run tests before deployment
+  test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run linter
+      run: npm run lint
+
+    - name: Build application (test)
+      run: npm run build
+      env:
+        NODE_ENV: production
+        VITE_API_URL: "https://example.com/api"  # Dummy URL for build test 

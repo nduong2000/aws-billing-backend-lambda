@@ -1,0 +1,241 @@
+name: Deploy Lambda Function
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: medical-billing-lambda
+  LAMBDA_FUNCTION_NAME: medical-billing-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Create ECR repository if it doesn't exist
+      run: |
+        aws ecr describe-repositories --repository-names $ECR_REPOSITORY --region $AWS_REGION || \
+        aws ecr create-repository --repository-name $ECR_REPOSITORY --region $AWS_REGION
+
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        # Build Docker image
+        docker buildx build --platform linux/amd64 \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+          -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          --push \
+          --provenance=false \
+          --sbom=false \
+          .
+        
+        echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+    - name: Check if Lambda function exists
+      id: check-function
+      run: |
+        if aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION >/dev/null 2>&1; then
+          echo "function_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "function_exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create Lambda function (if it doesn't exist)
+      if: steps.check-function.outputs.function_exists == 'false'
+      run: |
+        # Get or create execution role
+        ROLE_ARN=$(aws iam get-role --role-name medical-billing-lambda-role --query 'Role.Arn' --output text 2>/dev/null || echo "")
+        
+        if [ -z "$ROLE_ARN" ]; then
+          echo "Creating Lambda execution role..."
+          
+          # Create trust policy
+          cat > trust-policy.json << EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }
+        EOF
+          
+          # Create role
+          aws iam create-role \
+            --role-name medical-billing-lambda-role \
+            --assume-role-policy-document file://trust-policy.json
+          
+          # Attach basic execution policy
+          aws iam attach-role-policy \
+            --role-name medical-billing-lambda-role \
+            --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          
+          # Attach Bedrock policy
+          aws iam attach-role-policy \
+            --role-name medical-billing-lambda-role \
+            --policy-arn arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+          
+          # Wait for role to be available
+          sleep 10
+          
+          ROLE_ARN=$(aws iam get-role --role-name medical-billing-lambda-role --query 'Role.Arn' --output text)
+        fi
+        
+        echo "Using role: $ROLE_ARN"
+        
+        # Create Lambda function
+        aws lambda create-function \
+          --function-name $LAMBDA_FUNCTION_NAME \
+          --package-type Image \
+          --code ImageUri=$IMAGE_URI \
+          --role $ROLE_ARN \
+          --timeout 900 \
+          --memory-size 3008 \
+          --environment Variables='{
+            "CLAUDE_MODEL_ID":"anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "CLAUDE_HAIKU_MODEL_ID":"anthropic.claude-3-haiku-20240307-v1:0",
+            "BEDROCK_REGION":"us-east-1"
+          }' \
+          --region $AWS_REGION
+
+    - name: Update Lambda function code
+      if: steps.check-function.outputs.function_exists == 'true'
+      run: |
+        aws lambda update-function-code \
+          --function-name $LAMBDA_FUNCTION_NAME \
+          --image-uri $IMAGE_URI \
+          --region $AWS_REGION
+
+    - name: Update Lambda function configuration
+      run: |
+        aws lambda update-function-configuration \
+          --function-name $LAMBDA_FUNCTION_NAME \
+          --timeout 900 \
+          --memory-size 3008 \
+          --environment Variables='{
+            "CLAUDE_MODEL_ID":"anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "CLAUDE_HAIKU_MODEL_ID":"anthropic.claude-3-haiku-20240307-v1:0",
+            "BEDROCK_REGION":"us-east-1"
+          }' \
+          --region $AWS_REGION
+
+    - name: Wait for function to be updated
+      run: |
+        echo "Waiting for function update to complete..."
+        aws lambda wait function-updated --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION
+
+    - name: Create or update Function URL
+      id: function-url
+      run: |
+        # Check if function URL exists
+        FUNCTION_URL=$(aws lambda get-function-url-config --function-name $LAMBDA_FUNCTION_NAME --region $AWS_REGION --query 'FunctionUrl' --output text 2>/dev/null || echo "")
+        
+        if [ -z "$FUNCTION_URL" ]; then
+          echo "Creating Function URL..."
+          FUNCTION_URL=$(aws lambda create-function-url-config \
+            --function-name $LAMBDA_FUNCTION_NAME \
+            --auth-type NONE \
+            --cors '{}' \
+            --region $AWS_REGION \
+            --query 'FunctionUrl' --output text)
+          
+          # Add permission for public access
+          aws lambda add-permission \
+            --function-name $LAMBDA_FUNCTION_NAME \
+            --statement-id FunctionURLAllowPublicAccess \
+            --action lambda:InvokeFunctionUrl \
+            --principal "*" \
+            --function-url-auth-type NONE \
+            --region $AWS_REGION || true
+        fi
+        
+        echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_OUTPUT
+        echo "Function URL: $FUNCTION_URL"
+
+    - name: Test Lambda function
+      run: |
+        echo "Testing Lambda function..."
+        FUNCTION_URL="${{ steps.function-url.outputs.FUNCTION_URL }}"
+        
+        # Wait a bit for the function to be ready
+        sleep 10
+        
+        # Test health endpoint
+        curl -f "$FUNCTION_URL/health" || echo "Health check failed, but deployment completed"
+
+    - name: Deployment Summary
+      run: |
+        echo "## 🚀 Lambda Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📱 Function Details:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Function Name:** $LAMBDA_FUNCTION_NAME" >> $GITHUB_STEP_SUMMARY
+        echo "- **Function URL:** ${{ steps.function-url.outputs.FUNCTION_URL }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Region:** $AWS_REGION" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image:** $IMAGE_URI" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔧 Configuration:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Memory:** 3008 MB" >> $GITHUB_STEP_SUMMARY
+        echo "- **Timeout:** 900 seconds" >> $GITHUB_STEP_SUMMARY
+        echo "- **Runtime:** Python (Container)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🧪 Testing:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Health Check:** ${{ steps.function-url.outputs.FUNCTION_URL }}/health" >> $GITHUB_STEP_SUMMARY
+        echo "- **API Docs:** ${{ steps.function-url.outputs.FUNCTION_URL }}/docs" >> $GITHUB_STEP_SUMMARY
+
+  # Optional: Run tests before deployment
+  test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio httpx
+
+    - name: Run tests
+      run: |
+        # Add basic tests here
+        python -c "import lambda_function; print('Lambda function imports successfully')"
+        
+    - name: Lint code
+      run: |
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics 

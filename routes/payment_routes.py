@@ -56,9 +56,10 @@ class PaymentResponse(PaymentBase):
     payment_id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 @router.get("/", response_model=List[Dict[str, Any]])
+@router.get("", response_model=List[Dict[str, Any]])  # Handle without trailing slash
 async def get_all_payments(
     claim_id: Optional[int] = Query(None)
 ):

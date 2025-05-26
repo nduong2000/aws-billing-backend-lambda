@@ -1,0 +1,204 @@
+# Medical Billing API - Lambda Container Deployment
+
+This guide explains how to deploy your Medical Billing API as a containerized AWS Lambda function.
+
+## 🚀 Why Container-based Lambda?
+
+- **No size limits**: Container images can be up to 10GB (vs 250MB for zip)
+- **Full control**: Include any dependencies, libraries, or binaries
+- **Better performance**: Pre-built containers start faster
+- **Consistency**: Same container runs locally and in production
+
+## 📋 Prerequisites
+
+- Docker installed locally
+- AWS CLI configured with appropriate permissions
+- AWS account with ECR, Lambda, and API Gateway access
+
+## 🛠️ Setup Instructions
+
+### 1. Prepare Your Code
+
+First, copy the new files to your backend directory:
+
+```bash
+# Copy the Lambda-specific files
+cp Dockerfile .
+cp lambda_handler.py .
+cp requirements.txt requirements-lambda.txt
+cp deploy-lambda-container.sh .
+cp .env.lambda .
+```
+
+### 2. Update Requirements
+
+Replace your `requirements.txt` with the Lambda-optimized version:
+
+```bash
+mv requirements-lambda.txt requirements.txt
+```
+
+### 3. Test Locally (Optional)
+
+Test the Lambda container locally before deploying:
+
+```bash
+chmod +x test-lambda-local.sh
+./test-lambda-local.sh
+```
+
+### 4. Deploy to AWS
+
+Run the deployment script:
+
+```bash
+chmod +x deploy-lambda-container.sh
+./deploy-lambda-container.sh
+```
+
+This script will:
+1. Create an ECR repository
+2. Build and push your Docker image
+3. Create a Lambda function
+4. Set up API Gateway
+5. Configure all necessary permissions
+
+## 🔧 Configuration
+
+### Environment Variables
+
+Edit `.env.lambda` to configure:
+- `AWS_REGION`: Your AWS region
+- `BEDROCK_MODEL_ID`: The Bedrock model to use
+- Database credentials (if using RDS)
+
+### Memory and Timeout
+
+The Lambda is configured with:
+- Memory: 3008 MB (maximum for best performance)
+- Timeout: 900 seconds (15 minutes)
+
+You can adjust these in `deploy-lambda-container.sh`.
+
+## 📊 Architecture
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   Frontend  │────▶│ API Gateway  │────▶│   Lambda    │
+│ (CloudFront)│     │   (HTTPS)    │     │ (Container) │
+└─────────────┘     └──────────────┘     └─────────────┘
+                                                 │
+                                                 ▼
+                                          ┌─────────────┐
+                                          │   Bedrock   │
+                                          │     API     │
+                                          └─────────────┘
+```
+
+## 🧪 Testing Your Deployment
+
+After deployment, test your API:
+
+```bash
+# Get your API URL from the deployment output
+API_URL="https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod"
+
+# Test the claims endpoint
+curl "$API_URL/api/claims/test"
+
+# Test the audit endpoint
+curl -X POST "$API_URL/api/claims/1/audit" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+## 💰 Cost Optimization
+
+Lambda pricing is based on:
+- **Requests**: $0.20 per 1M requests
+- **Duration**: $0.0000166667 per GB-second
+- **Storage**: $0.10 per GB-month for container images
+
+With 3GB memory configuration:
+- Each request costs ~$0.00005 per second of execution
+- Storage for a 500MB container: ~$0.05/month
+
+## 🔍 Monitoring
+
+View logs and metrics:
+
+```bash
+# View recent logs
+aws logs tail /aws/lambda/medical-billing-api --follow
+
+# View metrics in CloudWatch
+# https://console.aws.amazon.com/cloudwatch/
+```
+
+## 🚨 Troubleshooting
+
+### Container Won't Build
+- Ensure Docker is running
+- Check `requirements.txt` for conflicts
+- Verify Python version compatibility
+
+### Lambda Timeout
+- Increase timeout in deployment script
+- Optimize database queries
+- Consider using RDS Proxy for connection pooling
+
+### API Gateway 502 Error
+- Check Lambda logs for errors
+- Verify IAM permissions
+- Ensure Lambda is returning proper response format
+
+### Bedrock Access Denied
+- Verify IAM role has `AmazonBedrockFullAccess`
+- Check AWS region supports Bedrock
+- Ensure model ID is correct
+
+## 🔄 Updating Your Function
+
+To update after code changes:
+
+```bash
+# Quick update (just code)
+docker build -t medical-billing-api .
+docker tag medical-billing-api:latest YOUR_ECR_URI:latest
+docker push YOUR_ECR_URI:latest
+aws lambda update-function-code --function-name medical-billing-api --image-uri YOUR_ECR_URI:latest
+
+# Full redeploy (includes infrastructure changes)
+./deploy-lambda-container.sh
+```
+
+## 🗑️ Cleanup
+
+To remove all resources:
+
+```bash
+# Delete Lambda function
+aws lambda delete-function --function-name medical-billing-api
+
+# Delete API Gateway
+aws apigateway delete-rest-api --rest-api-id YOUR_API_ID
+
+# Delete ECR repository
+aws ecr delete-repository --repository-name medical-billing-api --force
+
+# Delete IAM role
+aws iam detach-role-policy --role-name medical-billing-lambda-role --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+aws iam detach-role-policy --role-name medical-billing-lambda-role --policy-arn arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+aws iam delete-role --role-name medical-billing-lambda-role
+```
+
+## 🎉 Success!
+
+Your Medical Billing API is now running as a serverless Lambda function with:
+- ✅ Automatic scaling
+- ✅ Pay-per-use pricing
+- ✅ No server management
+- ✅ Built-in high availability
+- ✅ Integrated with AWS Bedrock
+
+Update your frontend `.env` file with the new API URL and you're ready to go!

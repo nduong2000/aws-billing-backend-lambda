@@ -1,0 +1,115 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ develop, staging ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - development
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '18'
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Create staging environment file
+      run: |
+        echo "VITE_API_URL=${{ secrets.VITE_API_URL_STAGING }}" > .env.staging
+        echo "NODE_ENV=staging" >> .env.staging
+
+    - name: Build application for staging
+      run: npm run build
+      env:
+        NODE_ENV: staging
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Deploy to Staging S3
+      run: |
+        # Sync built files to staging S3 bucket
+        aws s3 sync dist/ s3://${{ secrets.S3_BUCKET_NAME_STAGING }} --delete \
+          --cache-control "max-age=3600" --exclude "*.html"
+        
+        # Upload HTML files with short cache for staging
+        aws s3 sync dist/ s3://${{ secrets.S3_BUCKET_NAME_STAGING }} --delete \
+          --cache-control "max-age=0, no-cache, no-store, must-revalidate" --include "*.html"
+
+    - name: Invalidate Staging CloudFront cache
+      run: |
+        aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID_STAGING }} \
+          --paths "/*"
+
+    - name: Get Staging CloudFront URL
+      id: staging-url
+      run: |
+        CLOUDFRONT_DOMAIN=$(aws cloudfront get-distribution \
+          --id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID_STAGING }} \
+          --query 'Distribution.DomainName' --output text)
+        echo "domain=$CLOUDFRONT_DOMAIN" >> $GITHUB_OUTPUT
+        echo "url=https://$CLOUDFRONT_DOMAIN" >> $GITHUB_OUTPUT
+
+    - name: Staging Deployment Summary
+      run: |
+        echo "## 🚀 Staging Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🧪 Staging Environment:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Staging URL:** ${{ steps.staging-url.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **S3 Bucket:** s3://${{ secrets.S3_BUCKET_NAME_STAGING }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔍 Testing Notes:" >> $GITHUB_STEP_SUMMARY
+        echo "- This is a staging deployment for testing purposes" >> $GITHUB_STEP_SUMMARY
+        echo "- Changes will be visible in 2-5 minutes" >> $GITHUB_STEP_SUMMARY
+        echo "- Use this environment to test before promoting to production" >> $GITHUB_STEP_SUMMARY
+
+    - name: Comment on PR (if applicable)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 🚀 Staging Deployment Complete!
+            
+            Your changes have been deployed to staging:
+            **🔗 Staging URL:** ${{ steps.staging-url.outputs.url }}
+            
+            **📋 Deployment Details:**
+            - **Commit:** ${context.sha.substring(0, 7)}
+            - **Branch:** ${context.ref.replace('refs/heads/', '')}
+            - **Environment:** Staging
+            
+            Please test your changes and confirm they work as expected before merging.`
+          }) 
