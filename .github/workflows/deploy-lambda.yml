@@ -160,19 +160,30 @@ jobs:
         
         echo "Using role: $ROLE_ARN"
         
+        # Create Lambda configuration JSON
+        cat > lambda-create-config.json << EOF
+        {
+          "FunctionName": "$LAMBDA_FUNCTION_NAME",
+          "PackageType": "Image",
+          "Code": {
+            "ImageUri": "$IMAGE_URI"
+          },
+          "Role": "$ROLE_ARN",
+          "Timeout": 900,
+          "MemorySize": 3008,
+          "Environment": {
+            "Variables": {
+              "CLAUDE_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+              "CLAUDE_HAIKU_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0",
+              "BEDROCK_REGION": "us-east-1"
+            }
+          }
+        }
+        EOF
+        
         # Create Lambda function
         aws lambda create-function \
-          --function-name $LAMBDA_FUNCTION_NAME \
-          --package-type Image \
-          --code ImageUri=$IMAGE_URI \
-          --role $ROLE_ARN \
-          --timeout 900 \
-          --memory-size 3008 \
-          --environment Variables='{
-            "CLAUDE_MODEL_ID":"anthropic.claude-3-5-sonnet-20241022-v2:0",
-            "CLAUDE_HAIKU_MODEL_ID":"anthropic.claude-3-haiku-20240307-v1:0",
-            "BEDROCK_REGION":"us-east-1"
-          }' \
+          --cli-input-json file://lambda-create-config.json \
           --region $AWS_REGION
 
     - name: Ensure Lambda execution role has ECR permissions
@@ -213,15 +224,24 @@ jobs:
 
     - name: Update Lambda function configuration
       run: |
+        # Create Lambda configuration JSON
+        cat > lambda-update-config.json << EOF
+        {
+          "FunctionName": "$LAMBDA_FUNCTION_NAME",
+          "Timeout": 900,
+          "MemorySize": 3008,
+          "Environment": {
+            "Variables": {
+              "CLAUDE_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+              "CLAUDE_HAIKU_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0",
+              "BEDROCK_REGION": "us-east-1"
+            }
+          }
+        }
+        EOF
+        
         aws lambda update-function-configuration \
-          --function-name $LAMBDA_FUNCTION_NAME \
-          --timeout 900 \
-          --memory-size 3008 \
-          --environment Variables='{
-            "CLAUDE_MODEL_ID":"anthropic.claude-3-5-sonnet-20241022-v2:0",
-            "CLAUDE_HAIKU_MODEL_ID":"anthropic.claude-3-haiku-20240307-v1:0",
-            "BEDROCK_REGION":"us-east-1"
-          }' \
+          --cli-input-json file://lambda-update-config.json \
           --region $AWS_REGION
 
     - name: Wait for function to be updated
