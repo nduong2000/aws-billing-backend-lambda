@@ -169,5 +169,5 @@ if __name__ == "__main__":
     print_db_summary(conn)
     
     port = int(os.getenv("PORT", "5001"))
-    print(f"\nAPI server is running on port {port}. The database is in memory and will be lost when the server stops.")
+    print(f"\nAPI server is running on port {port}... The database is in memory and will be lost when the server stops.")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
